@@ -1,0 +1,32 @@
+name: "tpch_medallion"
+version: "1.0.0"
+config-version: 2
+
+# dbt Cloud manages the profile; this value is unused in Cloud.
+profile: "default"
+
+models:
+  tpch_medallion:
+    +materialized: table
+
+    sources:
+      +schema: bronze
+
+    bronze:
+      +schema: bronze
+      +tags: ["bronze"]
+      +materialized: view
+
+    silver:
+      +schema: silver
+      +tags: ["silver"]
+      +materialized: table
+
+    gold:
+      +schema: gold
+      +tags: ["gold"]
+      +materialized: table
+
+snapshots:
+  +target_database: DEMO_DB
+  +target_schema: SNAPSHOTS
