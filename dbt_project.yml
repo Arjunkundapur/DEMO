@@ -2,12 +2,11 @@ name: "tpch_medallion"
 version: "1.0.0"
 config-version: 2
 
-# tell dbt where your stuff lives (relative to the repo root)
 model-paths: ["tpch_medallion_dbt/models"]
 snapshot-paths: ["tpch_medallion_dbt/snapshots"]
-macro-paths: ["macros"]                      # yours is already at repo/macros
-#seed-paths: ["seeds"]                        # if you add seeds later
-#test-paths: ["tests"]                        # optional
+macro-paths: ["macros"]                     
+#seed-paths: ["seeds"]                       
+#test-paths: ["tests"]                       
 
 models:
   tpch_medallion:
