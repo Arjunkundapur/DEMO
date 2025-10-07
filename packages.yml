@@ -1,7 +1,8 @@
 packages:
   - package: dbt-labs/dbt_utils
     version: "1.1.1"
-  # add this only if your models actually use date_spine/date helpers:
+  - package: dbt-labs/dbt_date
+    version: "0.10.0"
   # - package: dbt-labs/dbt_date
   #   version: "0.10.0"
 
