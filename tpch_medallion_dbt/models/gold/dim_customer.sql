@@ -1,6 +1,6 @@
 with base as (select * from {{ ref('dim_customer_s') }})
 select
-  {{ dbt_utils.surrogate_key(['cust_key']) }} as customer_sk,
+  {{ dbt_utils.generate_surrogate_key(['cust_key']) }} as customer_sk,
   cust_key      as customer_nk,
   cust_name,
   cust_address,

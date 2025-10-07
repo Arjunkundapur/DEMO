@@ -1,0 +1,34 @@
+name: "tpch_medallion"
+version: "1.0.0"
+config-version: 2
+
+# tell dbt where your stuff lives (relative to the repo root)
+model-paths: ["tpch_medallion_dbt/models"]
+snapshot-paths: ["tpch_medallion_dbt/snapshots"]
+macro-paths: ["macros"]                      # yours is already at repo/macros
+#seed-paths: ["seeds"]                        # if you add seeds later
+#test-paths: ["tests"]                        # optional
+
+models:
+  tpch_medallion:
+    +database: DEMO_DB
+    +materialized: table
+
+    bronze:
+      +schema: BRONZE
+      +materialized: view
+      +tags: ["bronze"]
+
+    silver:
+      +schema: SILVER
+      +materialized: table
+      +tags: ["silver"]
+
+    gold:
+      +schema: GOLD
+      +materialized: table
+      +tags: ["gold"]
+
+snapshots:
+  +target_database: DEMO_DB
+  +target_schema: SNAPSHOTS
