@@ -1,0 +1,7 @@
+packages:
+  - package: dbt-labs/dbt_utils
+    version: ">=1.0.0,<2.0.0"
+  # If you use date_spine or other date helpers, add:
+  - package: dbt-labs/dbt_date
+    version: ">=0.10.0,<1.0.0"
+
