@@ -7,8 +7,6 @@ An end to end pipeline development with medallion level architecture built under
 3) Revenue by nation - customer and supplier
 4)Revenue by market segment
 
-<img width="468" height="127" alt="image" src="https://github.com/user-attachments/assets/00f4d5e2-de95-4e32-ae8d-596663a56a82" />
-
 
 <img width="468" height="119" alt="image" src="https://github.com/user-attachments/assets/9c3ed375-53ad-465f-8b5e-943019a6577c" />
 
