@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>tpch_medallion — End-to-End Data Pipeline</title>
+  <style>
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+    :root{
+      --bg-primary:#000;--bg-secondary:#0a1628;
+      --text-primary:#fff;--text-secondary:#86868b;--text-muted:#6e6e73;
+      --accent-1:#0071e3;--accent-1-light:#2997ff;
+      --accent-2-start:#6e3aff;--accent-2-end:#a855f7;
+      --accent-warm:#ff6723;--accent-green:#30d158;--accent-teal:#64d2ff;
+      --gray-200:#d2d2d7;--gray-400:#86868b;--gray-600:#6e6e73;
+      --card-bg:rgba(255,255,255,0.04);--card-border:rgba(255,255,255,0.08);--card-blur:40px;
+      --transition-cinematic:cubic-bezier(0.16,1,0.3,1);
+      --slide-duration:900ms;
+    }
+    html{overflow:hidden;background:#000}
+    body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Inter',sans-serif;background:#000;color:#fff;overflow:hidden;height:100vh;width:100vw;-webkit-font-smoothing:antialiased}
+    /* LOADING */
+    .loading-screen{position:fixed;inset:0;background:#000;display:flex;align-items:center;justify-content:center;z-index:10000;transition:opacity .6s ease}
+    .loading-screen.hidden{opacity:0;pointer-events:none}
+    .loading-spinner{width:32px;height:32px;border:2px solid rgba(255,255,255,.1);border-top-color:#0071e3;border-radius:50%;animation:spin .8s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    /* GRAIN */
+    .grain-overlay{position:fixed;top:-50%;left:-50%;width:200%;height:200%;pointer-events:none;z-index:9998;opacity:.035;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");animation:grain .5s steps(3) infinite}
+    @keyframes grain{0%{transform:translate(0,0)}33%{transform:translate(-2px,1px)}66%{transform:translate(1px,-1px)}}
+    /* PROGRESS */
+    .progress-bar{position:fixed;top:0;left:0;height:2px;background:linear-gradient(90deg,#0071e3,#a855f7);z-index:200;transition:width .6s var(--transition-cinematic);box-shadow:0 0 10px rgba(0,113,227,.5)}
+    /* NAV DOTS */
+    .nav-dots{position:fixed;right:24px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:12px;z-index:150}
+    .nav-dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.2);cursor:pointer;border:none;padding:0;transition:all .3s ease;position:relative}
+    .nav-dot:hover{background:#0071e3;transform:scale(1.3)}
+    .nav-dot.active{background:#fff;transform:scale(1.4);box-shadow:0 0 12px rgba(255,255,255,.4)}
+    .nav-dot::before{content:attr(data-label);position:absolute;right:20px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--text-secondary);white-space:nowrap;opacity:0;transition:opacity .2s ease;pointer-events:none}
+    .nav-dot:hover::before{opacity:1}
+    /* KEYBOARD HINT */
+    .keyboard-hint{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-muted);z-index:150;transition:opacity .4s ease}
+    .keyboard-hint.hidden{opacity:0;pointer-events:none}
+    .key-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:var(--card-bg);border:1px solid var(--card-border);font-size:11px;color:var(--text-secondary)}
+    /* SLIDES */
+    .slide-container{position:fixed;inset:0;width:100vw;height:100vh;transition:transform .5s var(--transition-cinematic)}
+    .slide{position:absolute;inset:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px;opacity:0;visibility:hidden;transform:scale(.95) translateY(30px);transition:opacity var(--slide-duration) var(--transition-cinematic),transform var(--slide-duration) var(--transition-cinematic),visibility 0s linear var(--slide-duration);will-change:opacity,transform;overflow-y:auto;overflow-x:hidden}
+    .slide.active{opacity:1;visibility:visible;transform:scale(1) translateY(0);transition:opacity var(--slide-duration) var(--transition-cinematic),transform var(--slide-duration) var(--transition-cinematic),visibility 0s linear 0s}
+    .slide.exiting-up{opacity:0;visibility:hidden;transform:scale(1.05) translateY(-50px)}
+    .slide.exiting-down{opacity:0;visibility:hidden;transform:scale(.9) translateY(50px)}
+    /* SLIDE BACKGROUNDS */
+    .slide--dark{background:#000}
+    .slide--gradient-blue{background:linear-gradient(145deg,#000 0%,#0a1628 40%,#0d2137 70%,#0a0a2e 100%)}
+    .slide--gradient-purple{background:linear-gradient(145deg,#000 0%,#1a0a2e 40%,#2d1b4e 60%,#0a0a2e 100%)}
+    .slide--gradient-warm{background:linear-gradient(145deg,#000 0%,#2e1a0a 40%,#3d1f0f 60%,#1a0a00 100%)}
+    .slide--gradient-deep{background:linear-gradient(145deg,#000 0%,#0a0a2e 40%,#141432 60%,#0a0a1e 100%)}
+    .slide--gradient-teal{background:linear-gradient(145deg,#000 0%,#0a1e28 40%,#0d2e3a 60%,#0a1a20 100%)}
+    /* AMBIENT ORBS */
+    .ambient-orb{position:absolute;border-radius:50%;filter:blur(120px);opacity:.15;pointer-events:none;animation:orbFloat 12s ease-in-out infinite alternate}
+    @keyframes orbFloat{0%{transform:translate(0,0) scale(1)}100%{transform:translate(30px,-20px) scale(1.1)}}
+    .orb-blue{background:#0071e3}.orb-purple{background:#a855f7}.orb-warm{background:#ff6723}.orb-teal{background:#64d2ff}.orb-green{background:#30d158}
+    /* HERO GLOW */
+    .hero-glow{position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(0,113,227,.08) 0%,rgba(168,85,247,.04) 40%,transparent 70%);pointer-events:none;top:50%;left:50%;transform:translate(-50%,-50%);animation:glowPulse 6s ease-in-out infinite alternate}
+    @keyframes glowPulse{0%{transform:translate(-50%,-50%) scale(1);opacity:.6}100%{transform:translate(-50%,-50%) scale(1.15);opacity:1}}
+    /* REVEAL */
+    .reveal-element{opacity:0;transform:translateY(40px);transition:opacity .8s var(--transition-cinematic),transform .8s var(--transition-cinematic)}
+    .reveal-element.revealed{opacity:1;transform:translateY(0)}
+    .reveal-element[data-delay="0"]{transition-delay:0s}
+    .reveal-element[data-delay="1"]{transition-delay:.15s}
+    .reveal-element[data-delay="2"]{transition-delay:.3s}
+    .reveal-element[data-delay="3"]{transition-delay:.45s}
+    .reveal-element[data-delay="4"]{transition-delay:.6s}
+    .reveal-element[data-delay="5"]{transition-delay:.75s}
+    .reveal-element[data-delay="6"]{transition-delay:.9s}
+    .reveal-element[data-delay="7"]{transition-delay:1.05s}
+    .reveal-element[data-delay="8"]{transition-delay:1.2s}
+    .reveal-element[data-delay="9"]{transition-delay:1.35s}
+    /* TYPOGRAPHY */
+    .hero-name{font-size:clamp(48px,10vw,120px);font-weight:700;letter-spacing:-.03em;line-height:1;text-align:center;background:linear-gradient(135deg,#fff 0%,#d2d2d7 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    .hero-subtitle{font-size:clamp(16px,2.5vw,28px);font-weight:400;color:var(--text-secondary);text-align:center;margin-top:24px}
+    .hero-tagline{font-size:clamp(13px,1.6vw,16px);color:var(--text-muted);text-align:center;max-width:520px;margin-top:12px;line-height:1.6}
+    .divider-line{width:60px;height:2px;background:linear-gradient(90deg,#0071e3,#a855f7);margin:28px auto;border-radius:1px}
+    .section-label{font-size:clamp(12px,1.4vw,16px);font-weight:600;letter-spacing:.15em;text-transform:uppercase;color:var(--accent-1);text-align:center;margin-bottom:16px}
+    .section-title{font-size:clamp(32px,6vw,72px);font-weight:700;letter-spacing:-.03em;line-height:1.1;text-align:center;background:linear-gradient(135deg,#fff 0%,#86868b 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    .section-subtitle{font-size:clamp(15px,2vw,22px);font-weight:400;color:var(--text-secondary);text-align:center;margin-top:16px;max-width:700px}
+    /* STATS */
+    .stats-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:48px 64px;max-width:900px;width:100%;margin-top:40px}
+    .stat-item{text-align:center}
+    .stat-number{font-size:clamp(48px,8vw,96px);font-weight:800;letter-spacing:-.04em;line-height:1;background:linear-gradient(135deg,#0071e3,#2997ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 20px rgba(0,113,227,.3))}
+    .stat-number.s-purple{background:linear-gradient(135deg,#6e3aff,#a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 20px rgba(168,85,247,.3))}
+    .stat-number.s-green{background:linear-gradient(135deg,#30d158,#5fe888);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 20px rgba(48,209,88,.3))}
+    .stat-number.s-warm{background:linear-gradient(135deg,#ff6723,#ff9a5c);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 20px rgba(255,103,35,.3))}
+    .stat-label{font-size:clamp(13px,1.6vw,17px);color:var(--text-secondary);margin-top:8px}
+    /* TECH GRID */
+    .tech-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px;max-width:900px;width:100%;margin-top:40px}
+    .tech-chip{background:var(--card-bg);backdrop-filter:blur(var(--card-blur));border:1px solid var(--card-border);border-radius:16px;padding:20px 16px;text-align:center;font-size:clamp(13px,1.4vw,15px);font-weight:500;color:#fff;transition:all .3s ease;position:relative}
+    .tech-chip:hover{transform:translateY(-4px);box-shadow:0 8px 30px rgba(0,113,227,.15);border-color:rgba(0,113,227,.4);background:rgba(0,113,227,.06)}
+    .chip-icon{display:block;font-size:26px;margin-bottom:8px}
+    .chip-sub{display:block;font-size:11px;color:var(--text-muted);margin-top:4px}
+    /* MEDALLION LAYERS */
+    .layers{display:flex;flex-direction:column;gap:16px;max-width:800px;width:100%;margin-top:32px}
+    .layer-card{background:var(--card-bg);backdrop-filter:blur(var(--card-blur));border:1px solid var(--card-border);border-radius:20px;padding:24px 32px;display:flex;align-items:center;gap:24px;position:relative;overflow:hidden}
+    .layer-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+    .layer-bronze::before{background:linear-gradient(90deg,transparent,#cd7f32,transparent)}
+    .layer-silver::before{background:linear-gradient(90deg,transparent,#c0c0c0,transparent)}
+    .layer-gold::before{background:linear-gradient(90deg,transparent,#ffd700,transparent)}
+    .layer-badge{font-size:13px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;padding:6px 14px;border-radius:8px;flex-shrink:0;width:80px;text-align:center}
+    .badge-bronze{background:rgba(205,127,50,.12);color:#cd7f32;border:1px solid rgba(205,127,50,.25)}
+    .badge-silver{background:rgba(192,192,192,.12);color:#c0c0c0;border:1px solid rgba(192,192,192,.25)}
+    .badge-gold{background:rgba(255,215,0,.12);color:#ffd700;border:1px solid rgba(255,215,0,.25)}
+    .layer-title{font-size:clamp(14px,1.8vw,18px);font-weight:600;color:#fff}
+    .layer-desc{font-size:clamp(12px,1.4vw,14px);color:var(--text-secondary);margin-top:4px}
+    /* METRICS LIST */
+    .metrics-list{display:flex;flex-direction:column;gap:16px;max-width:800px;width:100%;margin-top:32px}
+    .metric-item{background:var(--card-bg);backdrop-filter:blur(var(--card-blur));border:1px solid var(--card-border);border-radius:16px;padding:20px 28px;display:flex;align-items:center;gap:20px}
+    .metric-icon{font-size:28px;flex-shrink:0}
+    .metric-title{font-size:clamp(14px,1.8vw,18px);font-weight:600;color:#fff}
+    .metric-desc{font-size:clamp(12px,1.4vw,14px);color:var(--text-secondary);margin-top:3px}
+    /* CTA */
+    .cta-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 20px;border-radius:100px;background:rgba(48,209,88,.08);border:1px solid rgba(48,209,88,.2);font-size:14px;font-weight:500;color:#30d158}
+    .cta-pulse{width:8px;height:8px;border-radius:50%;background:#30d158;animation:pulse 2s ease-in-out infinite}
+    @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(48,209,88,.4)}50%{opacity:.8;box-shadow:0 0 0 8px rgba(48,209,88,0)}}
+    .cta-links{display:flex;gap:16px;margin-top:40px;flex-wrap:wrap;justify-content:center}
+    .cta-link{display:inline-flex;align-items:center;gap:10px;padding:14px 28px;border-radius:100px;background:var(--card-bg);backdrop-filter:blur(20px);border:1px solid var(--card-border);color:#fff;text-decoration:none;font-size:15px;font-weight:500;transition:all .3s ease}
+    .cta-link:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(0,113,227,.2);border-color:rgba(0,113,227,.4)}
+    .cta-link--primary{background:#0071e3;border-color:#0071e3}
+    .cta-link--primary:hover{background:#2997ff;border-color:#2997ff;box-shadow:0 8px 30px rgba(0,113,227,.4)}
+    .cta-link svg{width:18px;height:18px;fill:currentColor}
+    /* SPEAKER NOTES */
+    .speaker-notes{position:fixed;left:0;top:0;bottom:0;width:340px;background:rgba(10,10,20,.92);backdrop-filter:blur(30px);border-right:1px solid var(--card-border);z-index:300;transform:translateX(-100%);transition:transform .4s var(--transition-cinematic);overflow-y:auto}
+    body.notes-open .speaker-notes{transform:translateX(0)}
+    body.notes-open .slide-container{transform:translateX(170px) scale(.88)}
+    body.notes-open .progress-bar{left:340px}
+    .notes-header{position:sticky;top:0;padding:24px;background:rgba(10,10,20,.9);backdrop-filter:blur(20px);border-bottom:1px solid var(--card-border)}
+    .notes-header-top{display:flex;align-items:center;justify-content:space-between}
+    .notes-title{font-size:16px;font-weight:700;color:#fff}
+    .notes-close{width:28px;height:28px;border-radius:8px;border:none;background:var(--card-bg);color:var(--text-secondary);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .2s ease}
+    .notes-close:hover{background:rgba(255,255,255,.1)}
+    .notes-slide-label{font-size:13px;color:var(--text-muted);margin-top:8px}
+    .notes-body{padding:24px}
+    .note-content{display:none}
+    .note-content.active{display:block}
+    .note-content p{font-size:14px;line-height:1.7;color:var(--text-secondary);margin-bottom:16px}
+    .note-content p strong{color:#fff}
+    .note-tip{padding:12px 16px;border-radius:12px;background:rgba(0,113,227,.08);border-left:3px solid #0071e3;font-size:13px;line-height:1.6;color:var(--text-secondary);margin-top:16px}
+    /* CONTROLS */
+    .controls-bar{position:fixed;bottom:20px;right:20px;display:flex;gap:8px;z-index:250}
+    .control-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:10px;background:var(--card-bg);backdrop-filter:blur(20px);border:1px solid var(--card-border);color:var(--text-secondary);font-size:12px;font-weight:500;cursor:pointer;transition:all .2s ease}
+    .control-btn:hover{background:rgba(255,255,255,.08);color:#fff;border-color:rgba(255,255,255,.15)}
+    .control-btn svg{width:14px;height:14px;fill:currentColor}
+    .key-badge{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:4px;background:rgba(255,255,255,.06);font-size:10px;font-weight:600;color:var(--text-muted)}
+    /* RESPONSIVE */
+    @media(max-width:768px){.slide{padding:24px}.stats-grid{grid-template-columns:repeat(2,1fr);gap:32px}.tech-grid{grid-template-columns:repeat(2,1fr);gap:12px}.nav-dots{display:none}.layer-card{flex-direction:column;gap:12px}}
+    @media(max-width:480px){.stats-grid{grid-template-columns:1fr;gap:24px}.keyboard-hint,.controls-bar{display:none}}
+    /* PRINT */
+    @media print{*,*::before,*::after{animation:none!important;transition:none!important}html,body{overflow:visible!important;height:auto!important;width:auto!important}.loading-screen,.grain-overlay,.progress-bar,.nav-dots,.keyboard-hint,.controls-bar,.speaker-notes,.ambient-orb,.hero-glow{display:none!important}.slide-container{position:static!important;transform:none!important}.slide{position:relative!important;opacity:1!important;visibility:visible!important;transform:none!important;width:100%!important;height:100vh!important;page-break-after:always;break-after:page}.slide:last-child{page-break-after:auto}.reveal-element{opacity:1!important;transform:none!important}}
+    @page{size:landscape;margin:0}
+  </style>
+</head>
+<body>
+  <!-- Loading Screen -->
+  <div class="loading-screen" id="loadingScreen"><div class="loading-spinner"></div></div>
+  <!-- Grain -->
+  <div class="grain-overlay"></div>
+  <!-- Progress Bar -->
+  <div class="progress-bar" id="progressBar" style="width:14.28%"></div>
+  <!-- Nav Dots -->
+  <div class="nav-dots" id="navDots">
+    <button class="nav-dot active" data-slide="0" data-label="Intro" onclick="goToSlide(0)"></button>
+    <button class="nav-dot" data-slide="1" data-label="By The Numbers" onclick="goToSlide(1)"></button>
+    <button class="nav-dot" data-slide="2" data-label="Architecture" onclick="goToSlide(2)"></button>
+    <button class="nav-dot" data-slide="3" data-label="Tech Stack" onclick="goToSlide(3)"></button>
+    <button class="nav-dot" data-slide="4" data-label="The 3 Layers" onclick="goToSlide(4)"></button>
+    <button class="nav-dot" data-slide="5" data-label="Metrics" onclick="goToSlide(5)"></button>
+    <button class="nav-dot" data-slide="6" data-label="Dashboard" onclick="goToSlide(6)"></button>
+  </div>
+  <!-- Keyboard Hint -->
+  <div class="keyboard-hint" id="keyboardHint">
+    <span class="key-icon">&#8593;</span>
+    <span class="key-icon">&#8595;</span>
+    <span>or Space to navigate</span>
+  </div>
+  <!-- Speaker Notes -->
+  <div class="speaker-notes" id="speakerNotes">
+    <div class="notes-header">
+      <div class="notes-header-top">
+        <span class="notes-title">Talking Points</span>
+        <button class="notes-close" onclick="toggleNotes()">&times;</button>
+      </div>
+      <div class="notes-slide-label" id="notesSlideLabel">Slide 1 of 7</div>
+    </div>
+    <div class="notes-body">
+      <div class="note-content active" data-note="0">
+        <p><strong>Set the scene.</strong> This project is a full end-to-end data engineering pipeline built entirely within 24 hours as a personal challenge. It's a proof of what's possible when you combine the right tools — Snowflake, dbt Cloud, and Tableau — with a clear medallion architecture pattern.</p>
+        <div class="note-tip">Lead with the "24 hours" hook. It immediately signals speed, capability, and engineering discipline.</div>
+      </div>
+      <div class="note-content" data-note="1">
+        <p><strong>Let the numbers speak.</strong> Four business metrics delivered. Three clean architecture layers. One fully interactive Tableau dashboard. And the whole thing shipped in under 24 hours — not as a demo, but as a working, queryable production-style pipeline.</p>
+        <div class="note-tip">Pause after each count-up finishes. Allow the audience a moment to register each number.</div>
+      </div>
+      <div class="note-content" data-note="2">
+        <p><strong>Explain the medallion pattern.</strong> This is the industry standard for modern data lakehouses. Raw data lands in Bronze as views — no transformation, just ingestion. Silver applies cleaning, typing, and joins to produce reliable tables. Gold is where business logic lives: aggregations, metrics, KPIs.</p>
+        <div class="note-tip">This slide is conceptual. Don't rush it — make sure the audience understands why each layer exists before moving on.</div>
+      </div>
+      <div class="note-content" data-note="3">
+        <p><strong>Walk through the stack.</strong> Snowflake provides the TPCH_SF1 sample database — a standard benchmarking dataset used across the industry. dbt Cloud handles all SQL transformations using a code-first, version-controlled approach. Tableau connects to the Gold layer and renders the final dashboards.</p>
+        <div class="note-tip">If your audience is non-technical, focus on the outcome: "each tool had one job and they all fit together cleanly."</div>
+      </div>
+      <div class="note-content" data-note="4">
+        <p><strong>Zoom in on the layers.</strong> Bronze sources directly from Snowflake's TPCH_SF1 schema as lightweight views — no duplication. Silver materializes as tables after applying data quality rules and joins across fact and dimension tables. Gold runs the final business aggregations and is what Tableau reads from.</p>
+        <div class="note-tip">Point to each layer as you describe it. The color coding makes it easy to follow.</div>
+      </div>
+      <div class="note-content" data-note="5">
+        <p><strong>These are the KPIs the Gold layer surfaces.</strong> Monthly and yearly revenue is broken down both by nation and by individual customer. The Top 20 customers ranking uses window functions in dbt. Revenue by nation covers both customer-side and supplier-side flows. Segment analysis maps revenue to Snowflake's five market segments.</p>
+        <div class="note-tip">Each metric corresponds to a model in the Gold schema. Mention that these are all live, queryable tables.</div>
+      </div>
+      <div class="note-content" data-note="6">
+        <p><strong>Close with the output.</strong> Everything built in this pipeline surfaces in a single Tableau dashboard hosted on Tableau Cloud. The link is live — click through and explore the revenue breakdowns, customer rankings, and segment distributions directly.</p>
+        <div class="note-tip">If presenting live, open the Tableau link now and walk through one chart. That's the best possible demo.</div>
+      </div>
+    </div>
+  </div>
+  <!-- Controls Bar -->
+  <div class="controls-bar">
+    <button class="control-btn" onclick="toggleNotes()">
+      <svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm-1 7V3.5L18.5 9H13zM6 20V4h5v7h7v9H6z"/></svg>
+      Notes <span class="key-badge">T</span>
+    </button>
+    <button class="control-btn" onclick="exportPdf()">
+      <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+      PDF <span class="key-badge">P</span>
+    </button>
+  </div>
+  <!-- Slide Container -->
+  <div class="slide-container" id="slideContainer">
+
+    <!-- Slide 0: Hero -->
+    <div class="slide slide--dark active" data-slide="0">
+      <div class="hero-glow"></div>
+      <div class="ambient-orb orb-blue" style="width:500px;height:500px;top:15%;left:-10%;animation-delay:-2s"></div>
+      <div class="ambient-orb orb-purple" style="width:400px;height:400px;bottom:10%;right:-5%;animation-delay:-6s"></div>
+      <div class="reveal-element" data-delay="0"><p class="section-label" style="margin-bottom:20px">Data Engineering Challenge</p></div>
+      <div class="reveal-element" data-delay="1"><h1 class="hero-name">tpch_<br>medallion</h1></div>
+      <div class="reveal-element" data-delay="3"><div class="divider-line"></div></div>
+      <div class="reveal-element" data-delay="4"><p class="hero-subtitle">End-to-End Data Pipeline in 24 Hours</p></div>
+      <div class="reveal-element" data-delay="5"><p class="hero-tagline">Snowflake · dbt Cloud · Tableau · Medallion Architecture</p></div>
+    </div>
+
+    <!-- Slide 1: Stats -->
+    <div class="slide slide--gradient-blue" data-slide="1">
+      <div class="ambient-orb orb-blue" style="width:450px;height:450px;top:10%;right:-5%;animation-delay:-3s"></div>
+      <div class="ambient-orb orb-purple" style="width:350px;height:350px;bottom:15%;left:-8%;animation-delay:-7s"></div>
+      <div class="reveal-element" data-delay="0"><p class="section-label">By the Numbers</p></div>
+      <div class="stats-grid">
+        <div class="stat-item reveal-element" data-delay="1">
+          <div class="stat-number"><span class="count-up" data-target="24">0</span>h</div>
+          <div class="stat-label">Built in</div>
+        </div>
+        <div class="stat-item reveal-element" data-delay="2">
+          <div class="stat-number s-purple"><span class="count-up" data-target="3">0</span></div>
+          <div class="stat-label">Architecture layers</div>
+        </div>
+        <div class="stat-item reveal-element" data-delay="3">
+          <div class="stat-number s-green"><span class="count-up" data-target="4">0</span></div>
+          <div class="stat-label">Business metrics</div>
+        </div>
+        <div class="stat-item reveal-element" data-delay="4">
+          <div class="stat-number s-warm"><span class="count-up" data-target="1">0</span></div>
+          <div class="stat-label">Live Tableau dashboard</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Slide 2: Architecture Chapter -->
+    <div class="slide slide--gradient-purple" data-slide="2">
+      <div class="ambient-orb orb-purple" style="width:500px;height:500px;top:10%;right:-8%;animation-delay:-4s"></div>
+      <div class="ambient-orb orb-blue" style="width:350px;height:350px;bottom:10%;left:-5%;animation-delay:-8s"></div>
+      <div class="reveal-element" data-delay="0"><p class="section-label">Design Pattern</p></div>
+      <div class="reveal-element" data-delay="1"><h2 class="section-title">Medallion Architecture</h2></div>
+      <div class="reveal-element" data-delay="2"><p class="section-subtitle">A layered approach to data quality — raw ingestion, refined transformation, and curated business metrics — all managed in dbt Cloud on Snowflake.</p></div>
+    </div>
+
+    <!-- Slide 3: Tech Stack -->
+    <div class="slide slide--gradient-deep" data-slide="3">
+      <div class="ambient-orb orb-teal" style="width:400px;height:400px;top:5%;left:10%;animation-delay:-4s"></div>
+      <div class="ambient-orb orb-blue" style="width:350px;height:350px;bottom:5%;right:5%;animation-delay:-9s"></div>
+      <div class="reveal-element" data-delay="0"><p class="section-label">Tech Stack</p></div>
+      <div class="reveal-element" data-delay="1"><h2 class="section-title" style="font-size:clamp(28px,4vw,52px)">Built with the modern data stack</h2></div>
+      <div class="tech-grid" style="grid-template-columns:repeat(4,1fr)">
+        <div class="tech-chip reveal-element" data-delay="2">
+          <span class="chip-icon">❄️</span>
+          Snowflake
+          <span class="chip-sub">Cloud DW</span>
+        </div>
+        <div class="tech-chip reveal-element" data-delay="3">
+          <span class="chip-icon">🔧</span>
+          dbt Cloud
+          <span class="chip-sub">Transformations</span>
+        </div>
+        <div class="tech-chip reveal-element" data-delay="4">
+          <span class="chip-icon">📊</span>
+          Tableau
+          <span class="chip-sub">Visualization</span>
+        </div>
+        <div class="tech-chip reveal-element" data-delay="5">
+          <span class="chip-icon">🗃️</span>
+          TPCH_SF1
+          <span class="chip-sub">Source Dataset</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Slide 4: The 3 Layers -->
+    <div class="slide slide--gradient-blue" data-slide="4">
+      <div class="ambient-orb orb-blue" style="width:400px;height:400px;top:15%;right:-5%;animation-delay:-2s"></div>
+      <div class="ambient-orb orb-teal" style="width:300px;height:300px;bottom:10%;left:-5%;animation-delay:-6s"></div>
+      <div class="reveal-element" data-delay="0"><p class="section-label">Data Pipeline</p></div>
+      <div class="reveal-element" data-delay="1"><h2 class="section-title" style="font-size:clamp(28px,4vw,52px);margin-bottom:8px">The Three Layers</h2></div>
+      <div class="layers">
+        <div class="layer-card layer-bronze reveal-element" data-delay="2">
+          <span class="layer-badge badge-bronze">Bronze</span>
+          <div>
+            <div class="layer-title">Raw Ingestion — Snowflake Views</div>
+            <div class="layer-desc">Source tables from TPCH_SF1 exposed as lightweight views. No transformation, no duplication — just clean access to raw data.</div>
+          </div>
+        </div>
+        <div class="layer-card layer-silver reveal-element" data-delay="3">
+          <span class="layer-badge badge-silver">Silver</span>
+          <div>
+            <div class="layer-title">Refined Tables — Typed &amp; Joined</div>
+            <div class="layer-desc">Materialized tables with data quality rules applied. Fact and dimension tables are joined and cleaned for downstream use.</div>
+          </div>
+        </div>
+        <div class="layer-card layer-gold reveal-element" data-delay="4">
+          <span class="layer-badge badge-gold">Gold</span>
+          <div>
+            <div class="layer-title">Business Metrics — Aggregated KPIs</div>
+            <div class="layer-desc">Final aggregation layer powering business intelligence. Revenue models, customer rankings, and segment analysis — all Tableau-ready.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Slide 5: Business Metrics -->
+    <div class="slide slide--gradient-warm" data-slide="5">
+      <div class="ambient-orb orb-warm" style="width:400px;height:400px;top:10%;right:-5%;animation-delay:-3s"></div>
+      <div class="ambient-orb orb-purple" style="width:320px;height:320px;bottom:10%;left:-5%;animation-delay:-7s"></div>
+      <div class="reveal-element" data-delay="0"><p class="section-label">Gold Layer Output</p></div>
+      <div class="reveal-element" data-delay="1"><h2 class="section-title" style="font-size:clamp(28px,4vw,52px);margin-bottom:8px">Business Metrics Delivered</h2></div>
+      <div class="metrics-list">
+        <div class="metric-item reveal-element" data-delay="2">
+          <span class="metric-icon">📅</span>
+          <div>
+            <div class="metric-title">Monthly &amp; Yearly Revenue</div>
+            <div class="metric-desc">Broken down by nation and by individual customer — time-series revenue analysis across all dimensions.</div>
+          </div>
+        </div>
+        <div class="metric-item reveal-element" data-delay="3">
+          <span class="metric-icon">🏆</span>
+          <div>
+            <div class="metric-title">Top 20 Customers</div>
+            <div class="metric-desc">Window-function ranking of highest-value customers by total revenue across the dataset.</div>
+          </div>
+        </div>
+        <div class="metric-item reveal-element" data-delay="4">
+          <span class="metric-icon">🌍</span>
+          <div>
+            <div class="metric-title">Revenue by Nation</div>
+            <div class="metric-desc">Customer-side and supplier-side revenue flows broken out by nation for geographic analysis.</div>
+          </div>
+        </div>
+        <div class="metric-item reveal-element" data-delay="5">
+          <span class="metric-icon">📦</span>
+          <div>
+            <div class="metric-title">Revenue by Market Segment</div>
+            <div class="metric-desc">Revenue mapped to Snowflake's five standard TPCH market segments for competitive intelligence.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Slide 6: CTA -->
+    <div class="slide slide--gradient-blue" data-slide="6">
+      <div class="hero-glow" style="opacity:.4"></div>
+      <div class="ambient-orb orb-green" style="width:400px;height:400px;top:20%;right:10%;animation-delay:-3s"></div>
+      <div class="ambient-orb orb-blue" style="width:300px;height:300px;bottom:20%;left:5%;animation-delay:-7s"></div>
+      <div class="reveal-element" data-delay="0"><div class="cta-badge"><span class="cta-pulse"></span>Live Dashboard</div></div>
+      <div class="reveal-element" data-delay="1"><h2 class="section-title" style="font-size:clamp(32px,6vw,72px);margin-top:24px">See it in Tableau</h2></div>
+      <div class="reveal-element" data-delay="2"><p class="section-subtitle">Explore revenue breakdowns, customer rankings, and segment analysis — live on Tableau Cloud.</p></div>
+      <div class="cta-links reveal-element" data-delay="3">
+        <a href="https://us-east-1.online.tableau.com/#/site/kundapura-7f8ae33c88/workbooks/3440692?:origin=card_share_link" class="cta-link cta-link--primary" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24"><path d="M11 17H7c-2.76 0-5-2.24-5-5s2.24-5 5-5h4v2H7c-1.65 0-3 1.35-3 3s1.35 3 3 3h4v2zm-3-4h8v-2H8v2zm9 4h-4v-2h4c1.65 0 3-1.35 3-3s-1.35-3-3-3h-4V7h4c2.76 0 5 2.24 5 5s-2.24 5-5 5z"/></svg>
+          View Dashboard
+        </a>
+        <a href="https://github.com/Arjunkundapur/DEMO" class="cta-link" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24"><path d="M12 2A10 10 0 0 0 2 12c0 4.42 2.87 8.17 6.84 9.5.5.08.66-.23.66-.5v-1.69c-2.77.6-3.36-1.34-3.36-1.34-.46-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.87 1.52 2.34 1.07 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.92 0-1.11.38-2 1.03-2.71-.1-.25-.45-1.29.1-2.64 0 0 .84-.27 2.75 1.02.79-.22 1.65-.33 2.5-.33.85 0 1.71.11 2.5.33 1.91-1.29 2.75-1.02 2.75-1.02.55 1.35.2 2.39.1 2.64.65.71 1.03 1.6 1.03 2.71 0 3.82-2.34 4.66-4.57 4.91.36.31.69.92.69 1.85V21c0 .27.16.59.67.5C19.14 20.16 22 16.42 22 12A10 10 0 0 0 12 2z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+    </div>
+
+  </div>
+  <script>
+    (function(){
+      var TOTAL=7,DUR=900,DEBOUNCE=80,COUNT_DUR=1200,WHEEL_TH=50;
+      var cur=0,transitioning=false,notesOpen=false,wheelAcc=0,wheelT=null,interacted=false;
+      var slides=document.querySelectorAll('.slide');
+      var dots=document.querySelectorAll('.nav-dot');
+      var pb=document.getElementById('progressBar');
+      var hint=document.getElementById('keyboardHint');
+      var noteLabel=document.getElementById('notesSlideLabel');
+      var noteContents=document.querySelectorAll('.note-content');
+
+      function goToSlide(idx,dir){
+        if(transitioning||idx===cur||idx<0||idx>=TOTAL)return;
+        transitioning=true;
+        if(!interacted){interacted=true;hint.classList.add('hidden');}
+        var d=dir||(idx>cur?'up':'down');
+        var prev=slides[cur],next=slides[idx];
+        prev.classList.remove('active');
+        prev.classList.add(d==='up'?'exiting-up':'exiting-down');
+        prev.querySelectorAll('.reveal-element').forEach(function(el){el.classList.remove('revealed');});
+        next.classList.remove('exiting-up','exiting-down');
+        next.classList.add('active');
+        cur=idx;
+        dots.forEach(function(dot,i){dot.classList.toggle('active',i===cur);});
+        pb.style.width=((cur+1)/TOTAL*100)+'%';
+        next.querySelectorAll('.reveal-element').forEach(function(el){el.classList.add('revealed');});
+        next.querySelectorAll('.count-up').forEach(function(el){animateCount(el,0,parseInt(el.getAttribute('data-target'),10),COUNT_DUR);});
+        if(notesOpen)updateNotes();
+        setTimeout(function(){prev.classList.remove('exiting-up','exiting-down');transitioning=false;},DUR);
+      }
+
+      function animateCount(el,s,e,dur){
+        var t0=null;
+        (function step(ts){
+          if(!t0)t0=ts;
+          var p=Math.min((ts-t0)/dur,1),ease=1-Math.pow(1-p,3);
+          el.textContent=Math.round(s+(e-s)*ease);
+          if(p<1)requestAnimationFrame(step);
+        })(performance.now());
+      }
+
+      function toggleNotes(){
+        notesOpen=!notesOpen;
+        document.body.classList.toggle('notes-open',notesOpen);
+        if(notesOpen)updateNotes();
+      }
+
+      function updateNotes(){
+        noteLabel.textContent='Slide '+(cur+1)+' of '+TOTAL;
+        noteContents.forEach(function(n,i){n.classList.toggle('active',i===cur);});
+      }
+
+      function exportPdf(){
+        document.querySelectorAll('.count-up').forEach(function(el){el.textContent=el.getAttribute('data-target');});
+        var wasOpen=notesOpen;
+        if(notesOpen)toggleNotes();
+        setTimeout(function(){window.print();if(wasOpen)setTimeout(toggleNotes,300);},100);
+      }
+
+      document.addEventListener('keydown',function(e){
+        switch(e.key){
+          case'ArrowDown':case'ArrowRight':case' ':case'PageDown':e.preventDefault();goToSlide(cur+1,'up');break;
+          case'ArrowUp':case'ArrowLeft':case'PageUp':e.preventDefault();goToSlide(cur-1,'down');break;
+          case'Home':e.preventDefault();goToSlide(0,'down');break;
+          case'End':e.preventDefault();goToSlide(TOTAL-1,'up');break;
+          case't':case'T':toggleNotes();break;
+          case'p':case'P':exportPdf();break;
+          case'Escape':if(notesOpen)toggleNotes();break;
+        }
+      });
+
+      document.addEventListener('wheel',function(e){
+        e.preventDefault();
+        wheelAcc+=e.deltaY;
+        clearTimeout(wheelT);
+        wheelT=setTimeout(function(){wheelAcc=0;},DEBOUNCE);
+        if(Math.abs(wheelAcc)>=WHEEL_TH){
+          goToSlide(wheelAcc>0?cur+1:cur-1,wheelAcc>0?'up':'down');
+          wheelAcc=0;
+        }
+      },{passive:false});
+
+      var touchY=0;
+      document.addEventListener('touchstart',function(e){touchY=e.touches[0].clientY;},{passive:true});
+      document.addEventListener('touchmove',function(e){e.preventDefault();},{passive:false});
+      document.addEventListener('touchend',function(e){
+        var diff=touchY-e.changedTouches[0].clientY;
+        if(Math.abs(diff)>50)goToSlide(diff>0?cur+1:cur-1,diff>0?'up':'down');
+      },{passive:true});
+
+      document.addEventListener('mousemove',function(e){
+        var x=(e.clientX/window.innerWidth-.5)*2,y=(e.clientY/window.innerHeight-.5)*2;
+        var active=slides[cur];
+        active.querySelectorAll('.ambient-orb').forEach(function(orb,i){
+          var f=(i+1)*8;
+          orb.style.transform='translate('+(x*f)+'px,'+(y*f)+'px)';
+        });
+        var glow=active.querySelector('.hero-glow');
+        if(glow)glow.style.transform='translate(calc(-50% + '+(x*15)+'px),calc(-50% + '+(y*15)+'px))';
+      });
+
+      window.addEventListener('load',function(){
+        setTimeout(function(){
+          document.getElementById('loadingScreen').classList.add('hidden');
+          slides[0].querySelectorAll('.reveal-element').forEach(function(el){el.classList.add('revealed');});
+          slides[0].querySelectorAll('.count-up').forEach(function(el){animateCount(el,0,parseInt(el.getAttribute('data-target'),10),COUNT_DUR);});
+        },600);
+      });
+    })();
+  </script>
+</body>
+</html>
